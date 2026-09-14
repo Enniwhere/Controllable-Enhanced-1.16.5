@@ -183,5 +183,9 @@
     "controllable.tooltip.craft": "Click to Craft Item",
     "controllable.config.uiSounds": "UI Sounds",
     "controllable.config.radialThumbstick": "Radial Thumbstick",
+    "controllable.config.movementSource": "Movement Input",
+    "controllable.movement_source.thumbstick": "Thumbstick",
+    "controllable.movement_source.dpad": "D-Pad",
+    "controllable.movement_source.both": "Thumbstick and D-Pad",
     "key.categories.controllable_custom": "Custom"
 }

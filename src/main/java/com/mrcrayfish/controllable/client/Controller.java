@@ -158,6 +158,56 @@ public class Controller
     }
 
     /**
+     * Gets whether the up D-Pad button is currently pressed.
+     *
+     * @return true if the up D-Pad button is pressed
+     */
+    public boolean isDpadUpPressed()
+    {
+        return this.controller.buttons(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_UP) == GLFW.GLFW_PRESS;
+    }
+
+    /**
+     * Gets whether the down D-Pad button is currently pressed.
+     *
+     * @return true if the down D-Pad button is pressed
+     */
+    public boolean isDpadDownPressed()
+    {
+        return this.controller.buttons(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_DOWN) == GLFW.GLFW_PRESS;
+    }
+
+    /**
+     * Gets whether the left D-Pad button is currently pressed.
+     *
+     * @return true if the left D-Pad button is pressed
+     */
+    public boolean isDpadLeftPressed()
+    {
+        return this.controller.buttons(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_LEFT) == GLFW.GLFW_PRESS;
+    }
+
+    /**
+     * Gets whether the right D-Pad button is currently pressed.
+     *
+     * @return true if the right D-Pad button is pressed
+     */
+    public boolean isDpadRightPressed()
+    {
+        return this.controller.buttons(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_RIGHT) == GLFW.GLFW_PRESS;
+    }
+
+    /**
+     * Gets whether any direction of the D-Pad is currently pressed.
+     *
+     * @return true if any D-Pad button is pressed
+     */
+    public boolean isDpadPressed()
+    {
+        return this.isDpadUpPressed() || this.isDpadDownPressed() || this.isDpadLeftPressed() || this.isDpadRightPressed();
+    }
+
+    /**
      * Sets the mapping for this controller
      *
      * @param mapping the mapping to assign

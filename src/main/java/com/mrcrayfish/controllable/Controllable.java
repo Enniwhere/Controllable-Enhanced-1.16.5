@@ -29,7 +29,9 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -39,6 +41,14 @@ import java.util.Optional;
 public class Controllable implements IControllerListener
 {
     public static final Logger LOGGER = LogManager.getLogger(Reference.MOD_NAME);
+
+    /**
+     * System property used to select which connected controller this game instance should use by
+     * default. The value is a 1-based index of the connected controllers (i.e. the order they are
+     * listed in the controller selection screen). This allows multiple Minecraft instances to
+     * target different physical controllers, even when they are the same model.
+     */
+    public static final String CONTROLLER_PROPERTY = "controllable.controller";
 
     private static ControllerManager manager;
     private static Controller controller;
@@ -107,14 +117,8 @@ public class Controllable implements IControllerListener
             Controllable.manager = new ControllerManager();
             Controllable.manager.addControllerListener(this);
 
-            /* Attempts to load the first controller connected if auto select is enabled */
-            if(Config.CLIENT.options.autoSelect.get())
-            {
-                if(GLFW.glfwJoystickPresent(GLFW.GLFW_JOYSTICK_1) && GLFW.glfwJoystickIsGamepad(GLFW.GLFW_JOYSTICK_1))
-                {
-                    setController(new Controller(GLFW.GLFW_JOYSTICK_1));
-                }
-            }
+            /* Attempts to select the preferred controller, otherwise the first connected if auto select is enabled */
+            selectDefaultController();
 
             Mappings.load(configFolder);
 
@@ -137,7 +141,7 @@ public class Controllable implements IControllerListener
         {
             if(Controllable.controller == null)
             {
-                if(Config.CLIENT.options.autoSelect.get())
+                if(!selectPreferredController() && Config.CLIENT.options.autoSelect.get())
                 {
                     setController(new Controller(jid));
                 }
@@ -167,8 +171,11 @@ public class Controllable implements IControllerListener
 
                     if(Config.CLIENT.options.autoSelect.get() && manager.getControllerCount() > 0)
                     {
-                        Optional<Integer> optional = manager.getControllers().keySet().stream().min(Comparator.comparing(i -> i));
-                        optional.ifPresent(minJid -> setController(new Controller(minJid)));
+                        if(!selectPreferredController())
+                        {
+                            Optional<Integer> optional = manager.getControllers().keySet().stream().min(Comparator.comparing(i -> i));
+                            optional.ifPresent(minJid -> setController(new Controller(minJid)));
+                        }
                     }
 
                     Minecraft mc = Minecraft.getInstance();
@@ -179,6 +186,76 @@ public class Controllable implements IControllerListener
                 }
             }
         });
+    }
+
+    /**
+     * Selects the default controller on start up. If the {@link #CONTROLLER_PROPERTY} system
+     * property is set, the controller at that 1-based index is selected. Otherwise falls back to
+     * the first connected controller, matching the original behaviour.
+     */
+    private static void selectDefaultController()
+    {
+        if(selectPreferredController())
+            return;
+
+        if(!Config.CLIENT.options.autoSelect.get())
+            return;
+
+        if(GLFW.glfwJoystickPresent(GLFW.GLFW_JOYSTICK_1) && GLFW.glfwJoystickIsGamepad(GLFW.GLFW_JOYSTICK_1))
+        {
+            setController(new Controller(GLFW.GLFW_JOYSTICK_1));
+        }
+    }
+
+    /**
+     * Attempts to select the controller specified via the {@link #CONTROLLER_PROPERTY} system
+     * property. The value is a 1-based index of the connected controllers. This does not depend on
+     * the auto select config option since it is an explicit request from the user.
+     *
+     * @return true if a controller was selected
+     */
+    private static boolean selectPreferredController()
+    {
+        String value = System.getProperty(CONTROLLER_PROPERTY);
+        if(value == null || value.isEmpty())
+            return false;
+
+        int index;
+        try
+        {
+            index = Integer.parseInt(value.trim());
+        }
+        catch(NumberFormatException e)
+        {
+            LOGGER.warn("Invalid value '{}' for system property '{}', expected a 1-based controller index", value, CONTROLLER_PROPERTY);
+            return false;
+        }
+
+        if(index < 1)
+        {
+            LOGGER.warn("Invalid value '{}' for system property '{}', expected a 1-based controller index", value, CONTROLLER_PROPERTY);
+            return false;
+        }
+
+        List<Integer> jids = new ArrayList<>();
+        for(int jid = GLFW.GLFW_JOYSTICK_1; jid <= GLFW.GLFW_JOYSTICK_LAST; jid++)
+        {
+            if(GLFW.glfwJoystickIsGamepad(jid))
+            {
+                jids.add(jid);
+            }
+        }
+
+        if(index > jids.size())
+        {
+            LOGGER.warn("Requested controller index {} but only {} controller(s) are connected, falling back to auto select", index, jids.size());
+            return false;
+        }
+
+        int jid = jids.get(index - 1);
+        setController(new Controller(jid));
+        LOGGER.info("Selected controller index {} (jid {}, name '{}') from system property '{}'", index, jid, GLFW.glfwGetGamepadName(jid), CONTROLLER_PROPERTY);
+        return true;
     }
 
     public static void setController(@Nullable Controller controller)
@@ -261,6 +338,11 @@ public class Controllable implements IControllerListener
             return;
         }
 
+        /* Suppress the D-Pad actions while the D-Pad is being used to move the player in game */
+        boolean suppressedDpadMovement = screen == null
+                && Config.CLIENT.options.movementSource.get() != MovementSource.THUMBSTICK
+                && isDpadMovementButton(index);
+
         if(controller.getMapping() != null)
         {
             index = controller.getMapping().remap(index);
@@ -279,6 +361,10 @@ public class Controllable implements IControllerListener
             if(!states.getState(index))
             {
                 states.setState(index, true);
+                if(suppressedDpadMovement)
+                {
+                    return;
+                }
                 if(screen instanceof ButtonBindingScreen)
                 {
                     if(((ButtonBindingScreen) screen).processButton(index))
@@ -292,8 +378,17 @@ public class Controllable implements IControllerListener
         else if(states.getState(index))
         {
             states.setState(index, false);
+            if(suppressedDpadMovement)
+            {
+                return;
+            }
             input.handleButtonInput(controller, index, false, false);
         }
+    }
+
+    private static boolean isDpadMovementButton(int button)
+    {
+        return button == Buttons.DPAD_UP || button == Buttons.DPAD_DOWN || button == Buttons.DPAD_LEFT || button == Buttons.DPAD_RIGHT;
     }
 
     /**

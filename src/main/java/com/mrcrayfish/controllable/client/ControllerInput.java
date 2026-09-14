@@ -589,38 +589,71 @@ public class ControllerInput
         {
             if((!RadialMenuHandler.instance().isVisible() || Config.CLIENT.options.radialThumbstick.get() != Thumbstick.LEFT) && !MinecraftForge.EVENT_BUS.post(new ControllerEvent.Move(controller)))
             {
+                MovementInput movementInput = event.getMovementInput();
+                MovementSource movementSource = Config.CLIENT.options.movementSource.get();
                 float deadZone = Config.CLIENT.options.deadZone.get().floatValue();
+                float strafeDeadZone = player.getRidingEntity() instanceof BoatEntity ? 0.5F : deadZone;
 
-                if(Math.abs(controller.getLThumbStickYValue()) >= deadZone)
+                float forward = 0.0F;
+                float strafe = 0.0F;
+
+                /* Thumbstick movement (analog) */
+                if(movementSource != MovementSource.DPAD)
                 {
-                    this.setControllerInUse();
-                    int dir = controller.getLThumbStickYValue() > 0.0F ? -1 : 1;
-                    event.getMovementInput().forwardKeyDown = dir > 0;
-                    event.getMovementInput().backKeyDown = dir < 0;
-                    event.getMovementInput().moveForward = dir * MathHelper.clamp((Math.abs(controller.getLThumbStickYValue()) - deadZone) / (1.0F - deadZone), 0.0F, 1.0F);
-
-                    if(event.getMovementInput().sneaking)
+                    float thumbstickY = controller.getLThumbStickYValue();
+                    if(Math.abs(thumbstickY) >= deadZone)
                     {
-                        event.getMovementInput().moveForward *= 0.3D;
+                        int dir = thumbstickY > 0.0F ? -1 : 1;
+                        forward += dir * MathHelper.clamp((Math.abs(thumbstickY) - deadZone) / (1.0F - deadZone), 0.0F, 1.0F);
+                    }
+
+                    float thumbstickX = controller.getLThumbStickXValue();
+                    if(Math.abs(thumbstickX) >= strafeDeadZone)
+                    {
+                        int dir = thumbstickX > 0.0F ? -1 : 1;
+                        strafe += dir * MathHelper.clamp((Math.abs(thumbstickX) - strafeDeadZone) / (1.0F - strafeDeadZone), 0.0F, 1.0F);
                     }
                 }
 
-                if(player.getRidingEntity() instanceof BoatEntity)
+                /* D-Pad movement (digital, full speed) */
+                if(movementSource != MovementSource.THUMBSTICK)
                 {
-                    deadZone = 0.5F;
+                    if(controller.isDpadUpPressed())
+                        forward += 1.0F;
+                    if(controller.isDpadDownPressed())
+                        forward -= 1.0F;
+                    if(controller.isDpadLeftPressed())
+                        strafe += 1.0F;
+                    if(controller.isDpadRightPressed())
+                        strafe -= 1.0F;
                 }
 
-                if(Math.abs(controller.getLThumbStickXValue()) >= deadZone)
+                forward = MathHelper.clamp(forward, -1.0F, 1.0F);
+                strafe = MathHelper.clamp(strafe, -1.0F, 1.0F);
+
+                if(forward != 0.0F)
                 {
                     this.setControllerInUse();
-                    int dir = controller.getLThumbStickXValue() > 0.0F ? -1 : 1;
-                    event.getMovementInput().rightKeyDown = dir < 0;
-                    event.getMovementInput().leftKeyDown = dir > 0;
-                    event.getMovementInput().moveStrafe = dir * MathHelper.clamp((Math.abs(controller.getLThumbStickXValue()) - deadZone) / (1.0F - deadZone), 0.0F, 1.0F);
+                    movementInput.forwardKeyDown = forward > 0.0F;
+                    movementInput.backKeyDown = forward < 0.0F;
+                    movementInput.moveForward = forward;
 
-                    if(event.getMovementInput().sneaking)
+                    if(movementInput.sneaking)
                     {
-                        event.getMovementInput().moveStrafe *= 0.3D;
+                        movementInput.moveForward *= 0.3D;
+                    }
+                }
+
+                if(strafe != 0.0F)
+                {
+                    this.setControllerInUse();
+                    movementInput.leftKeyDown = strafe > 0.0F;
+                    movementInput.rightKeyDown = strafe < 0.0F;
+                    movementInput.moveStrafe = strafe;
+
+                    if(movementInput.sneaking)
+                    {
+                        movementInput.moveStrafe *= 0.3D;
                     }
                 }
             }
