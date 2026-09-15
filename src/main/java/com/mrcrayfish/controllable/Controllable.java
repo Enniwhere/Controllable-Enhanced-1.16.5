@@ -87,6 +87,9 @@ public class Controllable implements IControllerListener
      */
     private static boolean warnedControllerNotReady = false;
 
+    /** Ticker used to throttle periodic diagnostics while waiting for the requested controller. */
+    private static int selectionRetryCounter = 0;
+
     public Controllable()
     {
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::onClientSetup);
@@ -263,8 +266,16 @@ public class Controllable implements IControllerListener
 
     /**
      * Attempts to select the controller specified via the {@link #CONTROLLER_PROPERTY} system
-     * property. The value is a 1-based index of the connected controllers. This does not depend on
-     * the auto select config option since it is an explicit request from the user.
+     * property. The value may be:
+     * <ul>
+     *   <li>a GLFW joystick ID (0-based), e.g. {@code -Dcontrollable.controller=1}</li>
+     *   <li>a (partial, case-insensitive) controller name, e.g.
+     *       {@code -Dcontrollable.controller=Xbox}</li>
+     *   <li>a controller name with a 1-based occurrence index for identical models, e.g.
+     *       {@code -Dcontrollable.controller=Xbox#2} selects the second matching controller</li>
+     * </ul>
+     * Name matching is more robust than joystick IDs across multiple game instances, since GLFW
+     * joystick IDs are process-local and their assignment order is not guaranteed.
      *
      * @return true if a controller was selected
      */
@@ -274,37 +285,117 @@ public class Controllable implements IControllerListener
         if(value == null || value.isEmpty())
             return false;
 
-        int jid;
+        /* Parse "#n" occurrence suffix for identically named controllers */
+        String nameQuery = value;
+        int occurrence = 1;
+        int hashIndex = value.lastIndexOf('#');
+        if(hashIndex >= 0)
+        {
+            String suffix = value.substring(hashIndex + 1).trim();
+            try
+            {
+                occurrence = Integer.parseInt(suffix);
+                nameQuery = value.substring(0, hashIndex);
+                if(occurrence < 1)
+                {
+                    LOGGER.warn("Invalid occurrence '{}' in system property '{}', must be 1 or greater", suffix, CONTROLLER_PROPERTY);
+                    return false;
+                }
+            }
+            catch(NumberFormatException e)
+            {
+                /* Not "#number" - treat the whole string (including '#') as the name */
+            }
+        }
+
+        /* Try numeric joystick ID first */
+        Integer jidById = null;
         try
         {
-            jid = Integer.parseInt(value.trim());
+            jidById = Integer.parseInt(nameQuery.trim());
         }
-        catch(NumberFormatException e)
-        {
-            LOGGER.warn("Invalid value '{}' for system property '{}', expected a GLFW joystick ID (0-based)", value, CONTROLLER_PROPERTY);
-            return false;
-        }
+        catch(NumberFormatException ignored) {}
 
-        if(jid < GLFW.GLFW_JOYSTICK_1 || jid > GLFW.GLFW_JOYSTICK_LAST)
+        if(jidById != null)
         {
-            LOGGER.warn("Invalid value '{}' for system property '{}', expected a GLFW joystick ID between {} and {}", value, CONTROLLER_PROPERTY, GLFW.GLFW_JOYSTICK_1, GLFW.GLFW_JOYSTICK_LAST);
-            return false;
-        }
-
-        if(!GLFW.glfwJoystickIsGamepad(jid))
-        {
-            if(!warnedControllerNotReady)
+            int jid = jidById;
+            if(jid < GLFW.GLFW_JOYSTICK_1 || jid > GLFW.GLFW_JOYSTICK_LAST)
             {
-                warnedControllerNotReady = true;
-                LOGGER.info("Requested joystick ID {} is not a connected gamepad yet (present: {}, gamepad name: '{}'), will retry on subsequent ticks", jid, GLFW.glfwJoystickPresent(jid), GLFW.glfwGetGamepadName(jid) != null ? GLFW.glfwGetGamepadName(jid) : "<none>");
+                LOGGER.warn("Invalid value '{}' for system property '{}', expected a GLFW joystick ID between {} and {}", nameQuery, CONTROLLER_PROPERTY, GLFW.GLFW_JOYSTICK_1, GLFW.GLFW_JOYSTICK_LAST);
+                return false;
             }
-            return false;
+
+            if(!GLFW.glfwJoystickIsGamepad(jid))
+            {
+                logWaiting("Requested joystick ID {} is not a connected gamepad yet", String.valueOf(jid));
+                return false;
+            }
+
+            setController(new Controller(jid));
+            initialControllerSelected = true;
+            LOGGER.info("Selected controller at joystick ID {} (name '{}') from system property '{}'", jid, GLFW.glfwGetGamepadName(jid), CONTROLLER_PROPERTY);
+            return true;
         }
 
-        setController(new Controller(jid));
-        LOGGER.info("Selected controller at joystick ID {} (name '{}') from system property '{}'", jid, GLFW.glfwGetGamepadName(jid), CONTROLLER_PROPERTY);
-        return true;
-}
+        /* Otherwise match by (partial, case-insensitive) controller name */
+        String query = nameQuery.trim().toLowerCase();
+        int matchCount = 0;
+        for(int jid = GLFW.GLFW_JOYSTICK_1; jid <= GLFW.GLFW_JOYSTICK_LAST; jid++)
+        {
+            if(!GLFW.glfwJoystickIsGamepad(jid))
+                continue;
+
+            String name = GLFW.glfwGetGamepadName(jid);
+            if(name == null)
+                continue;
+
+            if(name.toLowerCase().contains(query))
+            {
+                matchCount++;
+                if(matchCount == occurrence)
+                {
+                    setController(new Controller(jid));
+                    initialControllerSelected = true;
+                    LOGGER.info("Selected controller at joystick ID {} (name '{}') from system property '{}' (match {}/{})", jid, name, CONTROLLER_PROPERTY, matchCount, occurrence);
+                    return true;
+                }
+            }
+        }
+
+        logWaiting("Requested controller matching '{}' (occurrence {}) not found yet", nameQuery, String.valueOf(occurrence));
+        return false;
+    }
+
+    /**
+     * Logs a periodic diagnostic while waiting for the requested controller, listing every
+     * connected joystick as GLFW currently sees it. Throttled to once every 100 ticks (5s) to
+     * avoid log spam during the retry loop.
+     */
+    private static void logWaiting(String message, String... args)
+    {
+        if(!warnedControllerNotReady)
+        {
+            warnedControllerNotReady = true;
+            LOGGER.info(message + (args.length > 0 ? "" : ""), (Object[]) args);
+        }
+
+        selectionRetryCounter++;
+        if(selectionRetryCounter % 100 == 0)
+        {
+            StringBuilder sb = new StringBuilder("Still waiting for requested controller; GLFW joysticks:");
+            boolean any = false;
+            for(int jid = GLFW.GLFW_JOYSTICK_1; jid <= GLFW.GLFW_JOYSTICK_LAST; jid++)
+            {
+                boolean present = GLFW.glfwJoystickPresent(jid);
+                String gpName = GLFW.glfwGetGamepadName(jid);
+                sb.append(String.format(" [jid=%d present=%s gamepadName=%s]", jid, present, gpName != null ? "'" + gpName + "'" : "<none>"));
+                any = true;
+            }
+            if(!any)
+                sb.append(" <none polled>");
+            LOGGER.info(sb.toString());
+        }
+    }
 
     public static void setController(@Nullable Controller controller)
     {
