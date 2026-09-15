@@ -171,7 +171,13 @@ public class Controllable implements IControllerListener
         {
             if(Controllable.controller == null)
             {
-                if(!selectPreferredController() && Config.CLIENT.options.autoSelect.get())
+                /*
+                 * If a controller was explicitly requested via the system property, only that
+                 * controller may be selected. Selecting any newly connected controller here
+                 * would cause multiple game instances to all grab the first available one.
+                 * The preferred controller is (re)tried each tick by selectDefaultController().
+                 */
+                if(System.getProperty(CONTROLLER_PROPERTY) == null && Config.CLIENT.options.autoSelect.get())
                 {
                     setController(new Controller(jid));
                 }
@@ -199,13 +205,16 @@ public class Controllable implements IControllerListener
 
                     setController(null);
 
-                    if(Config.CLIENT.options.autoSelect.get() && manager.getControllerCount() > 0)
+                    /*
+                     * When a controller was explicitly requested via the system property, never
+                     * grab an arbitrary controller on disconnect - the preferred controller is
+                     * retried each tick instead. Otherwise this could steal the controller that
+                     * another game instance (with a different property value) is using.
+                     */
+                    if(System.getProperty(CONTROLLER_PROPERTY) == null && Config.CLIENT.options.autoSelect.get() && manager.getControllerCount() > 0)
                     {
-                        if(!selectPreferredController())
-                        {
-                            Optional<Integer> optional = manager.getControllers().keySet().stream().min(Comparator.comparing(i -> i));
-                            optional.ifPresent(minJid -> setController(new Controller(minJid)));
-                        }
+                        Optional<Integer> optional = manager.getControllers().keySet().stream().min(Comparator.comparing(i -> i));
+                        optional.ifPresent(minJid -> setController(new Controller(minJid)));
                     }
 
                     Minecraft mc = Minecraft.getInstance();
@@ -232,14 +241,16 @@ public class Controllable implements IControllerListener
         }
 
         /*
-         * If no system property was requested there is nothing to retry, so stop retrying and
-         * just fall back to auto select. When a property IS set but the device is not ready
-         * yet, selection is retried on the next tick until it succeeds.
+         * If a controller was explicitly requested via the system property, never fall back to
+         * another controller - doing so would cause multiple game instances to all select the
+         * first controller. Instead keep waiting until the requested device enumerates.
          */
-        if(System.getProperty(CONTROLLER_PROPERTY) == null)
+        if(System.getProperty(CONTROLLER_PROPERTY) != null)
         {
-            initialControllerSelected = true;
+            return;
         }
+
+        initialControllerSelected = true;
 
         if(!Config.CLIENT.options.autoSelect.get())
             return;
@@ -247,7 +258,6 @@ public class Controllable implements IControllerListener
         if(GLFW.glfwJoystickPresent(GLFW.GLFW_JOYSTICK_1) && GLFW.glfwJoystickIsGamepad(GLFW.GLFW_JOYSTICK_1))
         {
             setController(new Controller(GLFW.GLFW_JOYSTICK_1));
-            initialControllerSelected = true;
         }
     }
 
