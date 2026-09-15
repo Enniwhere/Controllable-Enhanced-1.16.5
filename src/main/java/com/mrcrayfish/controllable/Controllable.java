@@ -1,9 +1,40 @@
 package com.mrcrayfish.controllable;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+
+import javax.annotation.Nullable;
+
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.lwjgl.glfw.GLFW;
+import org.lwjgl.system.MemoryUtil;
+
 import com.google.common.io.ByteStreams;
-import com.mrcrayfish.controllable.client.*;
+import com.mrcrayfish.controllable.client.ButtonBinding;
+import com.mrcrayfish.controllable.client.Buttons;
+import com.mrcrayfish.controllable.client.Controller;
+import com.mrcrayfish.controllable.client.ControllerEvents;
+import com.mrcrayfish.controllable.client.ControllerInput;
+import com.mrcrayfish.controllable.client.ControllerManager;
+import com.mrcrayfish.controllable.client.ControllerProperties;
+import com.mrcrayfish.controllable.client.ControllerToast;
+import com.mrcrayfish.controllable.client.GuiEvents;
+import com.mrcrayfish.controllable.client.IControllerListener;
+import com.mrcrayfish.controllable.client.Mappings;
+import com.mrcrayfish.controllable.client.MovementSource;
+import com.mrcrayfish.controllable.client.RadialMenuHandler;
+import com.mrcrayfish.controllable.client.RenderEvents;
 import com.mrcrayfish.controllable.client.gui.ButtonBindingScreen;
 import com.mrcrayfish.controllable.client.gui.ControllerLayoutScreen;
+
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraftforge.api.distmarker.Dist;
@@ -18,21 +49,6 @@ import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.network.FMLNetworkConstants;
-import org.apache.commons.lang3.tuple.Pair;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.lwjgl.glfw.GLFW;
-import org.lwjgl.system.MemoryUtil;
-
-import javax.annotation.Nullable;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Optional;
 
 /**
  * Author: MrCrayfish
@@ -220,43 +236,33 @@ public class Controllable implements IControllerListener
         if(value == null || value.isEmpty())
             return false;
 
-        int index;
+        int jid;
         try
         {
-            index = Integer.parseInt(value.trim());
+            jid = Integer.parseInt(value.trim());
         }
         catch(NumberFormatException e)
         {
-            LOGGER.warn("Invalid value '{}' for system property '{}', expected a 1-based controller index", value, CONTROLLER_PROPERTY);
+            LOGGER.warn("Invalid value '{}' for system property '{}', expected a GLFW joystick ID (0-based)", value, CONTROLLER_PROPERTY);
             return false;
         }
 
-        if(index < 1)
+        if(jid < GLFW.GLFW_JOYSTICK_1 || jid > GLFW.GLFW_JOYSTICK_LAST)
         {
-            LOGGER.warn("Invalid value '{}' for system property '{}', expected a 1-based controller index", value, CONTROLLER_PROPERTY);
+            LOGGER.warn("Invalid value '{}' for system property '{}', expected a GLFW joystick ID between {} and {}", value, CONTROLLER_PROPERTY, GLFW.GLFW_JOYSTICK_1, GLFW.GLFW_JOYSTICK_LAST);
             return false;
         }
 
-        List<Integer> jids = new ArrayList<>();
-        for(int jid = GLFW.GLFW_JOYSTICK_1; jid <= GLFW.GLFW_JOYSTICK_LAST; jid++)
+        if(!GLFW.glfwJoystickIsGamepad(jid))
         {
-            if(GLFW.glfwJoystickIsGamepad(jid))
-            {
-                jids.add(jid);
-            }
-        }
-
-        if(index > jids.size())
-        {
-            LOGGER.warn("Requested controller index {} but only {} controller(s) are connected, falling back to auto select", index, jids.size());
+            LOGGER.warn("Requested joystick ID {} is not a connected gamepad, falling back to auto select", jid);
             return false;
         }
 
-        int jid = jids.get(index - 1);
         setController(new Controller(jid));
-        LOGGER.info("Selected controller index {} (jid {}, name '{}') from system property '{}'", index, jid, GLFW.glfwGetGamepadName(jid), CONTROLLER_PROPERTY);
+        LOGGER.info("Selected controller at joystick ID {} (name '{}') from system property '{}'", jid, GLFW.glfwGetGamepadName(jid), CONTROLLER_PROPERTY);
         return true;
-    }
+}
 
     public static void setController(@Nullable Controller controller)
     {
