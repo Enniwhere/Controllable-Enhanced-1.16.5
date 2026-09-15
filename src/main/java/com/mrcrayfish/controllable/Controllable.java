@@ -72,6 +72,13 @@ public class Controllable implements IControllerListener
     private static File configFolder;
     private static boolean jeiLoaded;
 
+    /**
+     * Guards the one-time initial controller selection. The selection is deferred until the first
+     * client tick so that GLFW has polled its joystick state at least once; otherwise
+     * {@link GLFW#glfwJoystickIsGamepad(int)} can report stale data during early mod setup.
+     */
+    private static boolean initialControllerSelected = false;
+
     public Controllable()
     {
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::onClientSetup);
@@ -133,8 +140,7 @@ public class Controllable implements IControllerListener
             Controllable.manager = new ControllerManager();
             Controllable.manager.addControllerListener(this);
 
-            /* Attempts to select the preferred controller, otherwise the first connected if auto select is enabled */
-            selectDefaultController();
+            /* The initial controller selection is deferred to the first client tick (see controllerTick) */
 
             Mappings.load(configFolder);
 
@@ -285,6 +291,17 @@ public class Controllable implements IControllerListener
         if(manager != null)
         {
             manager.update();
+
+            /*
+             * Attempts to select the preferred controller, otherwise the first connected if auto
+             * select is enabled. This runs once, after the manager has updated at least once so
+             * that GLFW's joystick state has been polled and gamepad mappings are live.
+             */
+            if(!initialControllerSelected)
+            {
+                initialControllerSelected = true;
+                selectDefaultController();
+            }
         }
         if(controller != null)
         {
