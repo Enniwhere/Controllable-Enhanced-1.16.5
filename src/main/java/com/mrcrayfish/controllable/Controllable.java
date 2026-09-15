@@ -73,11 +73,19 @@ public class Controllable implements IControllerListener
     private static boolean jeiLoaded;
 
     /**
-     * Guards the one-time initial controller selection. The selection is deferred until the first
-     * client tick so that GLFW has polled its joystick state at least once; otherwise
-     * {@link GLFW#glfwJoystickIsGamepad(int)} can report stale data during early mod setup.
+     * Guards the initial controller selection. The selection is deferred until the client tick
+     * phase (and retried each tick until it succeeds) so that GLFW's joystick state is live;
+     * otherwise {@link GLFW#glfwJoystickIsGamepad(int)} can report stale data during early mod
+     * setup, and on Linux devices may only finish enumerating as gamepads a few ticks after
+     * startup.
      */
     private static boolean initialControllerSelected = false;
+
+    /**
+     * Ensures the "not a connected gamepad" warning is only logged once per game session, since
+     * the initial selection may be retried each tick while waiting for a device to enumerate.
+     */
+    private static boolean warnedControllerNotReady = false;
 
     public Controllable()
     {
@@ -218,7 +226,20 @@ public class Controllable implements IControllerListener
     private static void selectDefaultController()
     {
         if(selectPreferredController())
+        {
+            initialControllerSelected = true;
             return;
+        }
+
+        /*
+         * If no system property was requested there is nothing to retry, so stop retrying and
+         * just fall back to auto select. When a property IS set but the device is not ready
+         * yet, selection is retried on the next tick until it succeeds.
+         */
+        if(System.getProperty(CONTROLLER_PROPERTY) == null)
+        {
+            initialControllerSelected = true;
+        }
 
         if(!Config.CLIENT.options.autoSelect.get())
             return;
@@ -226,6 +247,7 @@ public class Controllable implements IControllerListener
         if(GLFW.glfwJoystickPresent(GLFW.GLFW_JOYSTICK_1) && GLFW.glfwJoystickIsGamepad(GLFW.GLFW_JOYSTICK_1))
         {
             setController(new Controller(GLFW.GLFW_JOYSTICK_1));
+            initialControllerSelected = true;
         }
     }
 
@@ -261,7 +283,11 @@ public class Controllable implements IControllerListener
 
         if(!GLFW.glfwJoystickIsGamepad(jid))
         {
-            LOGGER.warn("Requested joystick ID {} is not a connected gamepad, falling back to auto select", jid);
+            if(!warnedControllerNotReady)
+            {
+                warnedControllerNotReady = true;
+                LOGGER.info("Requested joystick ID {} is not a connected gamepad yet (present: {}, gamepad name: '{}'), will retry on subsequent ticks", jid, GLFW.glfwJoystickPresent(jid), GLFW.glfwGetGamepadName(jid) != null ? GLFW.glfwGetGamepadName(jid) : "<none>");
+            }
             return false;
         }
 
@@ -294,12 +320,12 @@ public class Controllable implements IControllerListener
 
             /*
              * Attempts to select the preferred controller, otherwise the first connected if auto
-             * select is enabled. This runs once, after the manager has updated at least once so
-             * that GLFW's joystick state has been polled and gamepad mappings are live.
+             * select is enabled. This is retried every tick until it succeeds, because on some
+             * systems (notably Linux) joysticks only finish enumerating as gamepads a few ticks
+             * after startup, even after GLFW has polled events.
              */
             if(!initialControllerSelected)
             {
-                initialControllerSelected = true;
                 selectDefaultController();
             }
         }
