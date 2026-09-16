@@ -4,6 +4,8 @@
 
 # Controllable
 
+> **This is a fork.** This repository is a fork of [MrCrayfish's Controllable](https://github.com/MrCrayfish/Controllable) at version `0.16.5-1.16.5`, maintained on the [`1_16_5-enhancements`](https://github.com/Enniwhere/Controllable-Enhanced-1.16.5/tree/1_16_5-enhancements) branch for one specific purpose: **running two Minecraft 1.16.5 instances side by side (split-screen) on a Raspberry Pi 5 / RetroPie, with one controller assigned to each instance.** All fork-specific changes are described in [Fork: Per-Instance Controller Selection](#fork-per-instance-controller-selection) below. The original upstream documentation follows after that.
+
 I noticed a lack of support for controller for the Java Edition of Minecraft, this is where Controllable comes in. Controllable adds that ability into the game. This mod has been heavily influenced by the controls in the Bedrock Edition of the game, however it is much more configurable (coming soon) and supports more controllers (coming soon)! There is also an API available for mod developers to add controller support to your own mod.
 
 ### Features:
@@ -49,3 +51,99 @@ You will then need to run gradlew setupDecompWorkspace again as Controllable use
 * **RenderPlayerPreviewEvent** - The event is fired every time the player preview in the top left corner is rendered. In case this is drawing over your GUI elements, this event can be cancelled, which stops it from renderering. An example can be found in MrCrayfish's Vehicle Mod
 
 It's best practice that when you override any of the default controls that they should be based on a certain condition. For instance, in MrCrayfish's Vehicle Mod, controls are only overridden when riding a vehicle. It does not affect normal gameplay in any way.
+
+---
+
+# Fork: Per-Instance Controller Selection
+
+## Purpose
+
+This fork exists to run **two Minecraft Java 1.16.5 instances simultaneously** on a Raspberry Pi 5 / RetroPie setup (split-screen), with **one controller assigned to each instance**. It is based on Controllable `0.16.5-1.16.5` and all changes live on the `1_16_5-enhancements` branch.
+
+- Repository: [Enniwhere/Controllable-Enhanced-1.16.5](https://github.com/Enniwhere/Controllable-Enhanced-1.16.5)
+- Branch: [`1_16_5-enhancements`](https://github.com/Enniwhere/Controllable-Enhanced-1.16.5/tree/1_16_5-enhancements)
+
+## The problem with upstream Controllable
+
+Upstream Controllable `0.16.5-1.16.5` automatically selected GLFW joystick ID `0` at startup:
+
+```java
+new Controller(GLFW.GLFW_JOYSTICK_1)   // GLFW_JOYSTICK_1 == 0
+```
+
+Both Minecraft processes therefore grabbed the **same physical controller**. Additionally, Controllable only persisted the controller name/mapping — not the physical joystick ID — so with two identical controllers (e.g. two `PS4 Controller` devices), the config file could not distinguish them either.
+
+## The solution
+
+The fork adds a JVM system property, `controllable.controller`, to select the preferred controller per Minecraft instance.
+
+```text
+-Dcontrollable.controller=<value>
+```
+
+`<value>` is a **controller name** (case-insensitive, partial match), optionally followed by `#n` to pick the n-th matching controller when two identical models are connected:
+
+| Form | Example | Meaning |
+|---|---|---|
+| Controller name | `-Dcontrollable.controller=PS4` | First gamepad whose name contains `PS4` (case-insensitive, partial match) |
+| Name + occurrence | `-Dcontrollable.controller=PS4#2` | Second gamepad matching `PS4` — for two identical controllers |
+
+Name-based matching is used instead of GLFW joystick IDs because IDs are *process-local* and their assignment depends on device enumeration order, which makes them unreliable across multiple game instances (and the numeric form did not work reliably in practice).
+
+### Example split-screen setup
+
+| Instance | JVM argument | Controller |
+|---|---|---|
+| `1.16.5` | `-Dcontrollable.controller=PS4#1` | First matching controller |
+| `1.16.5-P2` | `-Dcontrollable.controller=PS4#2` | Second matching controller |
+
+### Behavior details
+
+- **Startup selection is deferred and retried.** The selection runs on the client tick loop (not during early mod setup), because GLFW joystick state is only refreshed by the event pump and Linux may enumerate devices as gamepads a few ticks after startup. Selection retries each tick until it succeeds.
+- **Explicit requests are exclusive.** When `controllable.controller` is set, the mod *never* falls back to an arbitrary controller. Auto-select fallbacks (first connected controller on connection/disconnect) only run when no property is set. This prevents one instance from stealing the other's controller on hotplug or disconnect.
+- **Diagnostics.** While waiting for the requested controller, the mod logs the full GLFW joystick table every 5 seconds to `logs/latest.log` (search for `Still waiting for requested controller`).
+
+## Building the fork
+
+Requires **Java 8** for this ForgeGradle / Minecraft 1.16.5 setup.
+
+```bash
+# Use a full JDK 8 (e.g. ~/java/jdk8u504-b01), not only a bundled JRE
+export JAVA_HOME="$HOME/java/jdk8u504-b01"
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version && javac -version   # verify 1.8
+
+git fetch
+git reset --hard origin/1_16_5-enhancements
+
+chmod +x gradlew
+./gradlew clean --no-daemon --console=plain
+./gradlew build --no-daemon --console=plain \
+    -Dhttp.socketTimeout=300000 -Dhttp.connectionTimeout=120000 \
+    -Dhttps.protocols=TLSv1.2
+```
+
+> **Important:** run `clean` and `build` as **separate commands**. Running them together is a known Gradle issue in this setup and breaks compilation. Expected output: `BUILD SUCCESSFUL`.
+
+The built jar keeps the upstream filename/version (`controllable-0.16.5-1.16.5.jar`) so Forge treats it as a drop-in replacement.
+
+## Installation
+
+The built jar can be dropped into the `mods` folder of any launcher that supports multiple instances (e.g. [Prism Launcher](https://prismlauncher.org/) or Freesm Launcher). Each instance has its own Minecraft directory and `mods` folder. Back up the original Controllable JAR before replacing it, then add the per-instance JVM argument as shown above.
+
+## Related setup
+
+- Launcher: any multi-instance launcher (e.g. Prism Launcher or FreeSM Launcher)
+- Minecraft: Java Edition 1.16.5, Forge
+- Two Minecraft instances: `1.16.5-P1` and `1.16.5-P2`
+- Display/window management: XINIT, Openbox, `xdotool`, `wmctrl`
+- Launching: RetroPie Runcommand + split-screen shell scripts — see [Enniwhere/retropie-scripts](https://github.com/Enniwhere/retropie-scripts)
+
+## Maintenance checklist
+
+1. Keep the fork based on the 1.16.5 Controllable source.
+2. Build with a full Java 8 JDK, not only the bundled Java 8 runtime.
+3. Preserve the mod ID and version (`controllable-0.16.5-1.16.5.jar`) unless intentionally changing compatibility.
+4. Keep the per-instance JVM arguments distinct (e.g. `PS4#1` / `PS4#2`).
+5. Connect both controllers **before** launching the instances.
+6. If assignments change, check the diagnostic log line to confirm which physical controller matches which name/occurrence.
